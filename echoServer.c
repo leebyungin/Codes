@@ -7,22 +7,29 @@
 
 #define BUF_SIZE 30
 
-#define GetAddrLen(sock) \
-	((sock.mySock)->addr_len)
+// SOCK 구조체를 위한 매크로
+#define GetSockPtr(sock) \
+	(sock.mySock)
+// socket의 file descriptor를 반환
 #define GetSockFd(sock) \
-	((sock.mySock)->sockfd)
+	(GetSockPtr(sock)->sockfd)
+// socket의 IPv4 주소를 반환
 #define GetSockAddr(sock) \
-	((sock.mySock)->addr)
+	(GetSockPtr(sock)->addr)
+// socket의 주소 길이를 반환
+#define GetAddrLen(sock) \
+	(GetSockPtr(sock)->addr_len)
+// SOCK 구조체 생성 오류값 반환
 #define GetError(sock) \
 	(sock.error_no)
 
+//SOCK의 주소 설정을 위한  매크로
 #define SetFamily(sock,family) \
 	GetSockAddr(sock).sin_family=family 
 #define SetAddr(sock,addr) \
 	GetSockAddr(sock).sin_addr.s_addr=addr
-#define SetPort(sock,portInt) \
-	GetSockAddr(sock).sin_port=htons(portInt)
-
+#define SetPort(sock,port) \
+	GetSockAddr(sock).sin_port=port
 
 typedef struct
 {
@@ -39,12 +46,14 @@ typedef struct
 }SOCK;
 
 //SOCK's public functions
-SOCK createTCPSocket(const uint32_t ipv4address,const int port);
+//non_bind:1 create a non_bind socket
+SOCK createTCPSocket(const uint32_t ipv4address,const int port,int non_bind);
 int listenSocket(SOCK sock, int backlog);
 int acceptSocket(SOCK serv_sock,SOCK clnt_sock);
-//ssize_t readSocket(SOCK sock,void* buf,size_t byte);
-//ssize_t writeSocket(SOCK sock,const void* buf,size_t byte);
-//int closeSocket(SOCK sock);
+ssize_t readSocket(SOCK sock,void* const buf,size_t byte);
+ssize_t writeSocket(SOCK sock,const void* buf,size_t byte);
+int closeSocket(SOCK sock);
+int destroySocket(SOCK sock);
 //int shutdownSocket(SOCK sock,int how);
 
 
@@ -52,105 +61,45 @@ void error_handler(const char* msg);
 
 int main(int argc, char* argv[])
 {
+	char buf[BUF_SIZE];
+	int read_len=0;
 	SOCK serv_sock, clnt_sock;
 
-	serv_sock=createTCPSocket(INADDR_ANY,9196);
+	if(argc!=2)
+	{
+		printf("Usage: %s <port>\n",argv[0]);
+		exit(1);
+	}
+
+	serv_sock=createTCPSocket(INADDR_ANY,htons(atoi(argv[1])),0);
 	if(GetError(serv_sock)!=0)
 		error_handler("createTCPSocket() errro!");
 
-	clnt_sock=createTCPSocket(NULL,NULL);
+	clnt_sock=createTCPSocket(NULL,NULL,1);
 	if(GetError(clnt_sock)!=0)
 		error_handler("createTCPSocket() errro!");
 
 	if(listenSocket(serv_sock,5)==-1)
 		error_handler("listenSocket() errro!");
 
+	printf("wait for client\n");
+
 	if(acceptSocket(serv_sock,clnt_sock)==-1)
 		error_handler("acceptSocket() error!");
 
 	printf("client conntted!\n");
 
-
-/*
-	int serv_sd, clnt_sd;
-	char buf[BUF_SIZE];
-	int read_cnt;
-	pid_t pid;
-
-	struct sockaddr_in serv_adr,clnt_adr;
-	socklen_t clnt_adr_sz;
-
-	if(argc!=3)
+	//echo 서버
+	while((read_len=readSocket(clnt_sock,buf,BUF_SIZE-1))!=0)
 	{
-		printf("Usage: %s <port> <file>\n",argv[0]);
-		exit(1);
+		buf[read_len]=0;
+		writeSocket(clnt_sock,buf,read_len);
+
+		printf("%s",buf);
 	}
 
-
-	serv_sd=socket(PF_INET,SOCK_STREAM,0);
-	if(serv_sd==-1)
-		error_handler("socket() error!");
-
-	memset(&serv_adr,0,sizeof(serv_adr));
-	serv_adr.sin_family=AF_INET;
-	serv_adr.sin_port=htons(atoi(argv[1]));
-	serv_adr.sin_addr.s_addr=htonl(INADDR_ANY);
-
-	if(bind(serv_sd,(struct sockaddr*)&serv_adr,sizeof(serv_adr))==-1)
-		error_handler("bind() error!");
-
-	if(listen(serv_sd,5)==-1)
-		error_handler("listen() error!");
-
-	for(int connect_count=0; connect_count<5; connect_count++)
-	{
-		clnt_adr_sz=sizeof(clnt_adr);
-
-		if((clnt_sd=accept(serv_sd,(struct sockaddr*)&clnt_adr,&clnt_adr_sz))==-1)
-			error_handler("accept() error!");
-
-		pid=fork();
-
-		if(pid==0)
-		{
-			FILE *fp;
-
-			fp=fopen(argv[2],"rb");
-			if(fp==NULL)
-				error_handler("fopen() error!");
-
-			close(serv_sd);
-			while(1)
-			{
-				read_cnt=fread(buf,1,BUF_SIZE,fp);
-				if(read_cnt<BUF_SIZE)
-				{
-					if(write(clnt_sd,buf,read_cnt)==-1)
-					{
-						error_handler("write() error!");
-					}
-					break;
-				}
-				if(write(clnt_sd,buf,read_cnt)==-1)
-					error_handler("write() error!");
-			}
-			shutdown(clnt_sd,SHUT_WR);
-			read(clnt_sd,buf,BUF_SIZE);
-			printf("Message from client: %s\n",buf);
-
-			fclose(fp);
-			close(clnt_sd);
-
-			return 0;
-		}
-		else
-		{
-			close(clnt_sd);
-		}
-	}
-
-	close(serv_sd);
-	*/
+	closeSocket(clnt_sock);
+	closeSocket(serv_sock);
 }
 
 void error_handler(const char* msg)
@@ -159,24 +108,8 @@ void error_handler(const char* msg)
 	fputc('\n',stderr);
 	exit(1);
 }
-/*
-   for reference
-typedef struct
-{
-	struct sockaddr_in addr;
-	socklent_t addr_len;
-	int sockfd;
-	
-}__SOCKV4;
 
-typedef struct
-{
-	__SOCKV4* mySock;
-	char error_no;
-}SOCK;
-*/
-
-SOCK createTCPSocket(const uint32_t ipv4address,const int port)
+SOCK createTCPSocket(const uint32_t ipv4address,const int port,int non_bind)
 {
 	SOCK newSock;
 	GetError(newSock)=0;
@@ -189,7 +122,7 @@ SOCK createTCPSocket(const uint32_t ipv4address,const int port)
 		return newSock;
 	}
 
-	// if newSock is for accept()'s return
+	// if newSock is for accept()'s return  
 	if(ipv4address==NULL&&port==NULL)
 		return newSock;
 	
@@ -201,8 +134,13 @@ SOCK createTCPSocket(const uint32_t ipv4address,const int port)
 	SetAddr(newSock,ipv4address);
 	SetPort(newSock,port);
 
+
 	// call socket() and bind()
 	GetSockFd(newSock)= socket(PF_INET,SOCK_STREAM,0);
+
+	if(non_bind==1)
+		return newSock;
+
 	if( bind(GetSockFd(newSock), (struct sockaddr*)&GetSockAddr(newSock), GetAddrLen(newSock))==-1)
 	{
 		GetError(newSock)=-2;
@@ -216,7 +154,6 @@ int  acceptSocket(SOCK serv_sock,SOCK clnt_sock)
 {
 	GetSockFd(clnt_sock)= accept(GetSockFd(serv_sock),(struct sockaddr*)&GetSockAddr(clnt_sock), &GetAddrLen(clnt_sock));
 
-
 	return GetSockFd(clnt_sock);
 }
 
@@ -225,4 +162,24 @@ int  listenSocket(SOCK sock, int backlog)
 	return listen(GetSockFd(sock),backlog);
 
 }
-//ssize_t readSocket(SOCK sock,void* buf,size_t byte);
+
+ssize_t readSocket(SOCK sock,void* const buf,size_t byte)
+{
+	return read( GetSockFd(sock), buf, byte); 
+}
+
+ssize_t writeSocket(SOCK sock,const void* buf,size_t byte)
+{
+	return write( GetSockFd(sock), buf, byte);
+}
+
+int closeSocket(SOCK sock)
+{
+	close( GetSockFd(sock));
+	destroySocket(sock);	
+}
+
+int destroySocket(SOCK sock)
+{
+	free( GetSockPtr(sock) );
+}
